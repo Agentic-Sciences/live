@@ -24,6 +24,7 @@
             background: var(--bg);
             color: var(--text);
             min-height: 100vh;
+            min-height: 100dvh;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -66,41 +67,42 @@
             border-radius: 50%;
             background: radial-gradient(circle at 35% 35%, var(--blue), var(--purple), #1a1a3e);
             opacity: 0.3;
-            transition: all 0.5s ease;
+            transition: all 0.4s ease;
             position: relative;
         }
 
         .orb.listening {
             opacity: 1;
-            animation: orb-pulse 1.5s ease-in-out infinite;
+            animation: orb-pulse 2s ease-in-out infinite;
             box-shadow: 0 0 60px rgba(98,126,234,0.4), 0 0 120px rgba(155,89,182,0.2);
         }
 
         .orb.speaking {
             opacity: 1;
-            animation: orb-speak 0.3s ease-in-out infinite alternate;
+            animation: orb-speak 0.4s ease-in-out infinite alternate;
             background: radial-gradient(circle at 35% 35%, var(--green), var(--blue), #1a1a3e);
             box-shadow: 0 0 60px rgba(0,212,170,0.4), 0 0 120px rgba(98,126,234,0.2);
         }
 
         .orb.connecting {
             opacity: 0.6;
-            animation: orb-connect 2s linear infinite;
+            animation: orb-rotate 2s linear infinite;
         }
 
         @keyframes orb-pulse {
             0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.08); }
+            50% { transform: scale(1.06); }
         }
 
         @keyframes orb-speak {
             0% { transform: scale(1); }
-            100% { transform: scale(1.12); }
+            100% { transform: scale(1.1); }
         }
 
-        @keyframes orb-connect {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        @keyframes orb-rotate {
+            0% { opacity: 0.4; }
+            50% { opacity: 0.7; }
+            100% { opacity: 0.4; }
         }
 
         .status {
@@ -113,7 +115,6 @@
         .status.active { color: var(--green); }
         .status.error { color: var(--red); }
 
-        /* Buttons */
         .btn {
             width: 180px;
             padding: 14px 0;
@@ -124,36 +125,33 @@
             cursor: pointer;
             transition: all 0.3s;
             margin: 6px;
+            -webkit-tap-highlight-color: transparent;
         }
 
         .btn-start {
             background: linear-gradient(135deg, var(--blue), var(--purple));
             color: white;
         }
-
-        .btn-start:hover { transform: scale(1.05); box-shadow: 0 4px 20px rgba(98,126,234,0.4); }
+        .btn-start:active { transform: scale(0.95); }
 
         .btn-stop {
             background: var(--red);
             color: white;
         }
-
-        .btn-stop:hover { transform: scale(1.05); }
+        .btn-stop:active { transform: scale(0.95); }
 
         .btn:disabled {
             opacity: 0.4;
             cursor: not-allowed;
-            transform: none !important;
         }
 
-        /* Transcript */
         .transcript {
             margin-top: 30px;
             background: var(--card);
             border: 1px solid var(--border);
             border-radius: 16px;
             padding: 16px;
-            max-height: 200px;
+            max-height: 180px;
             overflow-y: auto;
             text-align: left;
             font-size: 0.85rem;
@@ -161,12 +159,10 @@
         }
 
         .transcript:empty { display: none; }
-
         .transcript .user { color: var(--blue); }
         .transcript .ai { color: var(--green); }
         .transcript .system { color: var(--muted); font-style: italic; font-size: 0.8rem; }
 
-        /* Settings */
         .settings {
             margin-top: 20px;
             font-size: 0.8rem;
@@ -188,7 +184,6 @@
             font-size: 0.75rem;
             color: var(--muted);
         }
-
         .footer a { color: var(--blue); text-decoration: none; }
     </style>
 </head>
@@ -201,7 +196,7 @@
             <div class="orb" id="orb"></div>
         </div>
 
-        <div class="status" id="status">Tap to start conversation</div>
+        <div class="status" id="status">Tap Start to begin</div>
 
         <div>
             <button class="btn btn-start" id="startBtn" onclick="startSession()">🎙️ Start</button>
@@ -218,7 +213,7 @@
                     <option value="Aoede" selected>Aoede</option>
                 </select>
             </label>
-            <label>Language:
+            <label>Lang:
                 <select id="langSelect">
                     <option value="zh">中文</option>
                     <option value="en">English</option>
@@ -241,83 +236,222 @@
         const WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${API_KEY}`;
 
         let ws = null;
-        let audioContext = null;
+        let inputCtx = null;
         let mediaStream = null;
-        let processor = null;
-        let playbackQueue = [];
-        let isPlaying = false;
+        let workletNode = null;
+        let playbackCtx = null;
+        let audioQueue = [];
+        let isPlayingAudio = false;
+        let isMuted = false; // mute mic while AI speaks
 
         const orb = document.getElementById('orb');
-        const status = document.getElementById('status');
+        const statusEl = document.getElementById('status');
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
-        const transcript = document.getElementById('transcript');
+        const transcriptEl = document.getElementById('transcript');
 
-        function setStatus(text, className = '') {
-            status.textContent = text;
-            status.className = 'status ' + className;
+        function setStatus(text, cls = '') {
+            statusEl.textContent = text;
+            statusEl.className = 'status ' + cls;
         }
 
-        function addTranscript(text, role = 'system') {
-            const div = document.createElement('div');
-            div.className = role;
-            div.textContent = (role === 'user' ? '🎤 ' : role === 'ai' ? '🤖 ' : '⚙️ ') + text;
-            transcript.appendChild(div);
-            transcript.scrollTop = transcript.scrollHeight;
+        function log(text, role = 'system') {
+            const d = document.createElement('div');
+            d.className = role;
+            const prefix = role === 'user' ? '🎤 ' : role === 'ai' ? '🤖 ' : '⚙️ ';
+            d.textContent = prefix + text;
+            transcriptEl.appendChild(d);
+            transcriptEl.scrollTop = transcriptEl.scrollHeight;
         }
 
+        // ── Audio Playback (queued, smooth) ──
+        function initPlayback() {
+            if (!playbackCtx) {
+                playbackCtx = new AudioContext({ sampleRate: 24000 });
+            }
+        }
+
+        function queueAudio(base64Data) {
+            // Decode base64 to Int16 PCM
+            const raw = atob(base64Data);
+            const bytes = new Uint8Array(raw.length);
+            for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+            const int16 = new Int16Array(bytes.buffer);
+            const float32 = new Float32Array(int16.length);
+            for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+            audioQueue.push(float32);
+            if (!isPlayingAudio) drainQueue();
+        }
+
+        async function drainQueue() {
+            if (audioQueue.length === 0) {
+                isPlayingAudio = false;
+                isMuted = false;
+                orb.className = 'orb listening';
+                setStatus('🎙️ Listening...', 'active');
+                return;
+            }
+
+            isPlayingAudio = true;
+            isMuted = true; // mute mic to prevent echo
+            orb.className = 'orb speaking';
+            setStatus('🔊 Speaking...', 'active');
+
+            initPlayback();
+
+            // Merge all queued chunks for smoother playback
+            let totalLen = 0;
+            for (const chunk of audioQueue) totalLen += chunk.length;
+            const merged = new Float32Array(totalLen);
+            let offset = 0;
+            for (const chunk of audioQueue) {
+                merged.set(chunk, offset);
+                offset += chunk.length;
+            }
+            audioQueue = [];
+
+            const buf = playbackCtx.createBuffer(1, merged.length, 24000);
+            buf.getChannelData(0).set(merged);
+
+            const source = playbackCtx.createBufferSource();
+            source.buffer = buf;
+            source.connect(playbackCtx.destination);
+
+            source.onended = () => {
+                // Small delay then check for more
+                setTimeout(() => drainQueue(), 100);
+            };
+
+            source.start();
+        }
+
+        // ── Mic Input via AudioWorklet (or ScriptProcessor fallback) ──
+        async function startMic() {
+            mediaStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    sampleRate: 16000,
+                    channelCount: 1,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            });
+
+            inputCtx = new AudioContext({ sampleRate: 16000 });
+            const source = inputCtx.createMediaStreamSource(mediaStream);
+
+            // Try AudioWorklet first, fall back to ScriptProcessor
+            try {
+                const workletCode = `
+                    class PCMProcessor extends AudioWorkletProcessor {
+                        constructor() {
+                            super();
+                            this.buffer = new Float32Array(0);
+                        }
+                        process(inputs) {
+                            const input = inputs[0][0];
+                            if (!input) return true;
+
+                            // Accumulate ~100ms chunks (1600 samples at 16kHz)
+                            const newBuf = new Float32Array(this.buffer.length + input.length);
+                            newBuf.set(this.buffer);
+                            newBuf.set(input, this.buffer.length);
+                            this.buffer = newBuf;
+
+                            if (this.buffer.length >= 1600) {
+                                this.port.postMessage(this.buffer);
+                                this.buffer = new Float32Array(0);
+                            }
+                            return true;
+                        }
+                    }
+                    registerProcessor('pcm-processor', PCMProcessor);
+                `;
+
+                const blob = new Blob([workletCode], { type: 'application/javascript' });
+                const url = URL.createObjectURL(blob);
+                await inputCtx.audioWorklet.addModule(url);
+                URL.revokeObjectURL(url);
+
+                workletNode = new AudioWorkletNode(inputCtx, 'pcm-processor');
+                workletNode.port.onmessage = (e) => {
+                    if (isMuted || !ws || ws.readyState !== WebSocket.OPEN) return;
+                    sendAudioChunk(e.data);
+                };
+                source.connect(workletNode);
+                workletNode.connect(inputCtx.destination);
+                console.log('Using AudioWorklet');
+            } catch (err) {
+                // Fallback to ScriptProcessor
+                console.log('Fallback to ScriptProcessor:', err.message);
+                const proc = inputCtx.createScriptProcessor(2048, 1, 1);
+                proc.onaudioprocess = (e) => {
+                    if (isMuted || !ws || ws.readyState !== WebSocket.OPEN) return;
+                    sendAudioChunk(e.inputBuffer.getChannelData(0));
+                };
+                source.connect(proc);
+                proc.connect(inputCtx.destination);
+            }
+        }
+
+        function sendAudioChunk(float32) {
+            const int16 = new Int16Array(float32.length);
+            for (let i = 0; i < float32.length; i++) {
+                int16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32768)));
+            }
+            const bytes = new Uint8Array(int16.buffer);
+            let bin = '';
+            for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+            const b64 = btoa(bin);
+
+            ws.send(JSON.stringify({
+                realtimeInput: {
+                    mediaChunks: [{
+                        mimeType: "audio/pcm;rate=16000",
+                        data: b64
+                    }]
+                }
+            }));
+        }
+
+        // ── Session Management ──
         async function startSession() {
             try {
                 startBtn.disabled = true;
                 orb.className = 'orb connecting';
                 setStatus('Connecting...', '');
 
-                // Get microphone
-                mediaStream = await navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        sampleRate: 16000,
-                        channelCount: 1,
-                        echoCancellation: true,
-                        noiseSuppression: true
-                    }
-                });
+                await startMic();
 
-                audioContext = new AudioContext({ sampleRate: 16000 });
-
-                // Connect WebSocket
                 ws = new WebSocket(WS_URL);
 
                 ws.onopen = () => {
-                    // Send setup message
                     const voice = document.getElementById('voiceSelect').value;
                     const lang = document.getElementById('langSelect').value;
 
-                    let systemInstruction = "You are ComeWealth (来财), a quantitative research AI assistant. You speak naturally in conversation. ";
-                    if (lang === 'zh') systemInstruction += "Please respond in Chinese (Mandarin).";
-                    else if (lang === 'en') systemInstruction += "Please respond in English.";
-                    else systemInstruction += "Respond in whatever language the user speaks.";
+                    let sysText = "You are ComeWealth (来财), a friendly and knowledgeable AI research assistant created by Agentic Sciences. Keep responses concise and conversational. ";
+                    if (lang === 'zh') sysText += "Always respond in Chinese (Mandarin).";
+                    else if (lang === 'en') sysText += "Always respond in English.";
+                    else sysText += "Respond in the same language the user speaks.";
 
-                    const setup = {
+                    ws.send(JSON.stringify({
                         setup: {
                             model: `models/${MODEL}`,
                             generationConfig: {
                                 responseModalities: ["AUDIO"],
                                 speechConfig: {
                                     voiceConfig: {
-                                        prebuiltVoiceConfig: {
-                                            voiceName: voice
-                                        }
+                                        prebuiltVoiceConfig: { voiceName: voice }
                                     }
                                 }
                             },
                             systemInstruction: {
-                                parts: [{ text: systemInstruction }]
+                                parts: [{ text: sysText }]
                             }
                         }
-                    };
-
-                    ws.send(JSON.stringify(setup));
-                    addTranscript('Connected to Gemini Live', 'system');
+                    }));
                 };
 
                 ws.onmessage = async (event) => {
@@ -328,146 +462,79 @@
                         data = JSON.parse(event.data);
                     }
 
-                    // Setup complete
                     if (data.setupComplete) {
                         setStatus('🎙️ Listening...', 'active');
                         orb.className = 'orb listening';
                         stopBtn.disabled = false;
-                        startStreamingAudio();
-                        addTranscript('Ready! Start speaking...', 'system');
+                        log('Connected! Start speaking...', 'system');
                         return;
                     }
 
-                    // Server content (audio response)
                     if (data.serverContent) {
                         const parts = data.serverContent.modelTurn?.parts || [];
                         for (const part of parts) {
-                            if (part.inlineData && part.inlineData.mimeType?.startsWith('audio/')) {
-                                orb.className = 'orb speaking';
-                                setStatus('🔊 Speaking...', 'active');
-                                await playAudio(part.inlineData.data);
+                            if (part.inlineData?.data) {
+                                queueAudio(part.inlineData.data);
                             }
                             if (part.text) {
-                                addTranscript(part.text, 'ai');
+                                log(part.text, 'ai');
                             }
                         }
 
                         if (data.serverContent.turnComplete) {
-                            orb.className = 'orb listening';
-                            setStatus('🎙️ Listening...', 'active');
+                            // Audio queue will handle the transition back to listening
+                            if (!isPlayingAudio) {
+                                orb.className = 'orb listening';
+                                setStatus('🎙️ Listening...', 'active');
+                                isMuted = false;
+                            }
                         }
                     }
                 };
 
                 ws.onerror = (err) => {
                     console.error('WS error:', err);
-                    setStatus('Connection error', 'error');
-                    orb.className = 'orb';
+                    setStatus('Connection error — try again', 'error');
                     cleanup();
                 };
 
-                ws.onclose = () => {
-                    setStatus('Disconnected', '');
-                    orb.className = 'orb';
+                ws.onclose = (e) => {
+                    if (e.code !== 1000) {
+                        setStatus(`Disconnected (${e.code})`, 'error');
+                    } else {
+                        setStatus('Session ended', '');
+                    }
                     cleanup();
                 };
 
             } catch (err) {
                 console.error(err);
-                setStatus('Error: ' + err.message, 'error');
-                orb.className = 'orb';
+                if (err.name === 'NotAllowedError') {
+                    setStatus('⚠️ Microphone permission denied', 'error');
+                } else {
+                    setStatus('Error: ' + err.message, 'error');
+                }
                 cleanup();
             }
         }
 
-        function startStreamingAudio() {
-            const source = audioContext.createMediaStreamSource(mediaStream);
-
-            // Use ScriptProcessor for wider compatibility
-            processor = audioContext.createScriptProcessor(4096, 1, 1);
-
-            processor.onaudioprocess = (e) => {
-                if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-                const float32 = e.inputBuffer.getChannelData(0);
-                // Convert to 16-bit PCM
-                const int16 = new Int16Array(float32.length);
-                for (let i = 0; i < float32.length; i++) {
-                    int16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32768)));
-                }
-
-                // Base64 encode
-                const bytes = new Uint8Array(int16.buffer);
-                let binary = '';
-                for (let i = 0; i < bytes.length; i++) {
-                    binary += String.fromCharCode(bytes[i]);
-                }
-                const b64 = btoa(binary);
-
-                // Send to Gemini
-                ws.send(JSON.stringify({
-                    realtimeInput: {
-                        mediaChunks: [{
-                            mimeType: "audio/pcm;rate=16000",
-                            data: b64
-                        }]
-                    }
-                }));
-            };
-
-            source.connect(processor);
-            processor.connect(audioContext.destination);
-        }
-
-        async function playAudio(base64Data) {
-            try {
-                const binaryStr = atob(base64Data);
-                const bytes = new Uint8Array(binaryStr.length);
-                for (let i = 0; i < binaryStr.length; i++) {
-                    bytes[i] = binaryStr.charCodeAt(i);
-                }
-
-                // Try decoding as audio
-                const playCtx = new AudioContext({ sampleRate: 24000 });
-                try {
-                    const audioBuffer = await playCtx.decodeAudioData(bytes.buffer.slice(0));
-                    const source = playCtx.createBufferSource();
-                    source.buffer = audioBuffer;
-                    source.connect(playCtx.destination);
-                    source.start();
-                } catch {
-                    // Raw PCM - assume 24kHz 16-bit mono
-                    const int16 = new Int16Array(bytes.buffer);
-                    const float32 = new Float32Array(int16.length);
-                    for (let i = 0; i < int16.length; i++) {
-                        float32[i] = int16[i] / 32768;
-                    }
-                    const audioBuffer = playCtx.createBuffer(1, float32.length, 24000);
-                    audioBuffer.getChannelData(0).set(float32);
-                    const source = playCtx.createBufferSource();
-                    source.buffer = audioBuffer;
-                    source.connect(playCtx.destination);
-                    source.start();
-                }
-            } catch (err) {
-                console.error('Audio playback error:', err);
-            }
-        }
-
         function stopSession() {
-            addTranscript('Session ended', 'system');
-            setStatus('Tap to start conversation', '');
-            if (ws) { ws.close(); ws = null; }
+            log('Session ended', 'system');
+            if (ws) { ws.close(1000); ws = null; }
             cleanup();
         }
 
         function cleanup() {
             startBtn.disabled = false;
             stopBtn.disabled = true;
-            if (processor) { processor.disconnect(); processor = null; }
+            isMuted = false;
+            isPlayingAudio = false;
+            audioQueue = [];
+            if (workletNode) { workletNode.disconnect(); workletNode = null; }
             if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
-            if (audioContext) { audioContext.close().catch(()=>{}); audioContext = null; }
+            if (inputCtx) { inputCtx.close().catch(()=>{}); inputCtx = null; }
             orb.className = 'orb';
+            if (!statusEl.classList.contains('error')) setStatus('Tap Start to begin', '');
         }
     </script>
 </body>
