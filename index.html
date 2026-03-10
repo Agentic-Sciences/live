@@ -280,7 +280,7 @@
     <canvas id="canvas"></canvas>
 
     <script>
-        const API_KEY = 'AIzaSyAtGVCnCvgATp0f2tw3hHhQdyOOE_yCD1M';
+        const API_KEY = new URLSearchParams(window.location.search).get('key') || '';
         const MODEL = 'gemini-2.5-flash-native-audio-latest';
         const WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${API_KEY}`;
 
@@ -554,7 +554,8 @@
             try {
                 startBtn.disabled = true;
                 orb.className = 'orb connecting';
-                setStatus('Connecting...', '');
+                if (!API_KEY) { setStatus('⚠️ Add ?key=YOUR_API_KEY to URL', 'error'); startBtn.disabled = false; return; }
+            setStatus('Connecting...', '');
 
                 await startMic();
 
