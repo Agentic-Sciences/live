@@ -277,7 +277,9 @@
         const WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${API_KEY}`;
 
         // Audio noise gate threshold — ignore quiet sounds
-        const NOISE_GATE = 0.015;
+        const NOISE_GATE = 0.018;
+        // Silence timeout: after speech detected, if silent for this many ms, signal end of turn
+        const SILENCE_TIMEOUT_MS = 1500;
 
         let ws = null;
         let inputCtx = null;
@@ -291,6 +293,9 @@
         let videoInterval = null;
         let isPTTMode = false;
         let isPTTActive = false;
+        let lastSpeechTime = 0;
+        let hasSpeech = false;
+        let silenceTimer = null;
 
         const orb = document.getElementById('orb');
         const orbContainer = document.getElementById('orbContainer');
@@ -480,7 +485,26 @@
                 let sum = 0;
                 for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
                 const rms = Math.sqrt(sum / input.length);
-                if (rms < NOISE_GATE) return; // Skip silent/noise frames
+
+                if (rms < NOISE_GATE) {
+                    // Below threshold — check if we had speech and now silent
+                    if (hasSpeech && !silenceTimer) {
+                        silenceTimer = setTimeout(() => {
+                            // User stopped speaking — signal end of turn
+                            if (ws && ws.readyState === WebSocket.OPEN && hasSpeech && !isMuted) {
+                                ws.send(JSON.stringify({ clientContent: { turnComplete: true } }));
+                                hasSpeech = false;
+                            }
+                            silenceTimer = null;
+                        }, SILENCE_TIMEOUT_MS);
+                    }
+                    return; // Skip silent frames
+                }
+
+                // Speech detected — reset silence timer
+                hasSpeech = true;
+                lastSpeechTime = Date.now();
+                if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
 
                 // Accumulate ~200ms chunks
                 const newBuf = new Float32Array(sendBuffer.length + input.length);
