@@ -280,7 +280,7 @@
     <canvas id="canvas"></canvas>
 
     <script>
-        const API_KEY = new URLSearchParams(window.location.search).get('key') || '';
+        const API_KEY = new URLSearchParams(window.location.search).get('key') || localStorage.getItem('gemini_api_key') || '';
         const MODEL = 'gemini-2.5-flash-native-audio-latest';
         const WS_URL = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${API_KEY}`;
 
@@ -554,7 +554,18 @@
             try {
                 startBtn.disabled = true;
                 orb.className = 'orb connecting';
-                if (!API_KEY) { setStatus('⚠️ Add ?key=YOUR_API_KEY to URL', 'error'); startBtn.disabled = false; return; }
+                if (!API_KEY) {
+                    const k = prompt('Enter your Gemini API Key\n(Get one free at aistudio.google.com/apikey)');
+                    if (k && k.startsWith('AIza')) {
+                        localStorage.setItem('gemini_api_key', k);
+                        location.reload();
+                        return;
+                    }
+                    setStatus('⚠️ API key required', 'error');
+                    startBtn.disabled = false;
+                    return;
+                }
+                if (API_KEY) localStorage.setItem('gemini_api_key', API_KEY);
             setStatus('Connecting...', '');
 
                 await startMic();
